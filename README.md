@@ -73,6 +73,9 @@ pinça de zoom.
   de reaparecer do outro lado
 - **🌈 Colorir** — a cor das células desliza continuamente, uma volta a cada 2 minutos
   (ligado por padrão)
+- **🕯 Idade** — cada célula nasce escura e vai clareando a cada geração que
+  sobrevive; o que se move fica sempre escuro e só o que fica parado clareia
+- **🌀 Psicodélico** — arco-íris saturado em faixas oblíquas que correm pela tela
 - **🎨 Cores** — sorteia fundo e células com contraste garantido
 - **Char** — desenha as células com qualquer caractere ou emoji
 - **🖼 Imagem** — usa uma imagem do seu computador como célula (fica só no navegador,

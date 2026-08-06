@@ -130,9 +130,9 @@
        de quem quer desenhar ali — some, e o botão flutuante assume. */
     #trigger { display: none; }
     #barToggle { display: block; }
-    /* Some com o que é ruim de operar no toque: seletores de cor nativos e
-       o campo de caractere, que exigiria abrir o teclado de emoji. O botão
-       🎨 Cores continua lá e cobre a troca de cores. */
+    /* Some só com os seletores de cor nativos, ruins de operar no toque; o
+       botão 🎨 Cores cobre a troca de cores. O campo de caractere fica: vale
+       o teclado de emoji para quem quiser trocar o desenho da célula. */
     .only-mouse { display: none; }
     .only-touch { display: inline; }
     body.idle { cursor: auto; }
@@ -182,7 +182,9 @@
   <label class="only-mouse">Fundo <input type="color" id="bgColor" value="#000000"></label>
   <label class="only-mouse">Células <input type="color" id="cellColor" value="#ffffff"></label>
   <button id="changeBtn">🌈 Colorir</button>
-  <label class="only-mouse" title="Caractere desenhado em cada célula viva (vazio = quadrado)">
+  <button id="ageBtn" class="off" title="Cada célula nasce escura e vai clareando conforme sobrevive">🕯 Idade</button>
+  <button id="psyBtn" class="off" title="Arco-íris em faixas que correm pela tela">🌀 Psicodélico</button>
+  <label title="Caractere desenhado em cada célula viva (vazio = quadrado)">
     Char <input type="text" id="glyph" maxlength="2" placeholder="■" autocomplete="off">
   </label>
   <button id="rndColorBtn">🎨 Cores</button>
@@ -224,10 +226,17 @@ let COLS = 0, ROWS = 0;
 // A simulação não sabe da câmera — só o desenho e o clique a consultam.
 const view = { x: 0, y: 0, cell: BASE_CELL };
 
+// Mesmo critério do CSS: sem hover é toque. Na tela do celular o mundo a
+// 100% mostraria um pedacinho do tabuleiro, então lá se abre afastado ao
+// máximo, com tudo à vista.
+const isTouch = window.matchMedia('(hover: none)').matches;
+
 // Dois buffers fixos: step() escreve no de trás e troca os ponteiros,
 // então nenhuma memória é alocada por geração.
 let grid = new Uint8Array(0);
 let back = new Uint8Array(0);
+// Há quantas gerações cada célula está viva (0 = morta ou recém-nascida).
+let age = new Uint8Array(0);
 
 let generation = 0;
 let running = true;
@@ -263,6 +272,66 @@ let changeMode = true;   // ligado por padrão
 let cycleHue = 0, cycleSat = 85, cycleLight = 62;
 let lastHueTime = 0;
 
+// Modo "idade": a célula nasce escura e vai clareando a cada geração que
+// sobrevive, até saturar em AGE_MAX. Como o ciclo de matiz repinta todas as
+// células da mesma cor, os dois modos se excluem.
+const AGE_MAX = 40;           // depois disso a célula já está no tom mais claro
+const AGE_L0 = 20, AGE_L1 = 96;   // luminosidade do recém-nascido ao ancião
+let ageMode = false;
+let agePalette = null;
+let agePaletteKey = '';
+
+// Uma cor pronta por idade: o laço de desenho só troca fillStyle quando a
+// idade muda, em vez de recalcular HSL célula a célula.
+function buildAgePalette() {
+  const [h, s] = hexToHsl(cellColor);
+  // Cinza puro continua cinza; com cor, a saturação cede um pouco no fim
+  // porque tom claro e muito saturado fica berrante.
+  const sat = s < 15 ? 0 : s;
+  agePalette = new Array(AGE_MAX + 1);
+  for (let a = 0; a <= AGE_MAX; a++) {
+    const t = a / AGE_MAX;
+    agePalette[a] = hsl(h, sat * (1 - 0.5 * t), AGE_L0 + (AGE_L1 - AGE_L0) * t);
+  }
+  agePaletteKey = cellColor;
+}
+
+// Modo "psicodélico": arco-íris saturado em faixas oblíquas que correm pela
+// tela. A cor vem da posição da célula somada à fase do tempo, então o
+// padrão anda mesmo com a simulação pausada.
+const PSY_STEPS = 90;
+// A cor não dá mais a volta no círculo: ela balança de leve em torno da
+// matiz de origem de cada mancha, indo e voltando devagar. Assim cada
+// mancha só passeia entre tons vizinhos, em vez de percorrer o espectro.
+const PSY_SWING = 22;         // quantos graus para cada lado
+const PSY_CYCLE = 90;         // segundos de uma ida e volta completa
+let psyMode = false;
+let psyTime = 0;              // segundos acumulados com o modo ligado
+let psyHue = 0;               // deslocamento de matiz atual, em graus
+
+// Cada índice fica a um ângulo áureo (137,5°) do anterior, então manchas
+// vizinhas caem em pontos bem distantes do círculo de cor e nada vira um
+// degradê arco-íris. Saturação e brilho seguem a mesma ideia, para não sair
+// tudo no mesmo tom de neon.
+const psyPalette = new Array(PSY_STEPS);
+function buildPsyPalette() {
+  for (let k = 0; k < PSY_STEPS; k++) {
+    const j = (k * 0.6180339887) % 1;
+    psyPalette[k] = hsl((k * 137.508 + psyHue) % 360, 72 + 28 * j, 40 + 34 * j);
+  }
+}
+buildPsyPalette();
+
+// Manchas de 2×2 células sorteadas por uma mistura barata da posição: o
+// resultado é confete, não listra. Não depende do tempo — quem anda é a
+// matiz da paleta inteira, girando devagar. Assim a cor de cada mancha
+// desliza continuamente em vez de saltar de tom em tom (que é o que piscava).
+function psyIndex(c, r) {
+  const bx = c >> 1, by = r >> 1;
+  const n = bx * 37 + by * 61 + ((bx * by) & 7) * 11;
+  return wrap(n, PSY_STEPS);
+}
+
 const idx = (x, y) => y * COLS + x;
 
 // --- dimensionamento ------------------------------------------------------
@@ -272,6 +341,9 @@ const idx = (x, y) => y * COLS + x;
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth, h = window.innerHeight;
+  // Já estava todo à vista? Então continua assim depois do redimensionamento
+  // (girar o celular muda o mundo mínimo), sem desfazer um zoom manual.
+  const wasFitted = COLS > 0 && view.cell <= minCell() + 0.01;
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -283,16 +355,27 @@ function resize() {
     const oldCols = COLS, oldRows = ROWS, old = grid;
     COLS = Math.max(COLS, needCols);
     ROWS = Math.max(ROWS, needRows);
+    const oldAge = age;
     grid = new Uint8Array(COLS * ROWS);
     back = new Uint8Array(COLS * ROWS);
+    age = new Uint8Array(COLS * ROWS);
 
     for (let y = 0; y < oldRows; y++) {
       for (let x = 0; x < oldCols; x++) {
         grid[y * COLS + x] = old[y * oldCols + x];
+        age[y * COLS + x] = oldAge[y * oldCols + x];
       }
     }
     recount();
   }
+  if (isTouch && wasFitted) view.cell = minCell();
+  clampView();
+  draw();
+}
+
+// Afasta até o mundo inteiro caber na tela.
+function fitView() {
+  view.cell = minCell();
   clampView();
   draw();
 }
@@ -375,6 +458,10 @@ function step() {
       const alive = grid[mid + x];
       const v = (alive && (n === 2 || n === 3)) || (!alive && n === 3) ? 1 : 0;
       next[mid + x] = v;
+      // Sobreviveu: envelhece. Morreu: zera, para quem nascer ali depois
+      // começar do tom mais escuro em vez de herdar a idade do anterior.
+      const a = age[mid + x];
+      age[mid + x] = v ? (a < AGE_MAX ? a + 1 : AGE_MAX) : 0;
       count += v;
     }
   }
@@ -418,11 +505,19 @@ function draw() {
 
   ctx.fillStyle = cellColor;
 
+  // Modos que pintam célula a célula. A paleta é fixa e pequena, então o
+  // laço só troca fillStyle quando o índice muda — trocar a cada célula
+  // custaria caro com dezenas de milhares delas na tela.
+  if (ageMode && agePaletteKey !== cellColor) buildAgePalette();
+  const pal = ageMode ? agePalette : psyMode ? psyPalette : null;
+  let lastK = -1;
+
   // Abaixo de 6 px imagem e caractere viram borrão ilegível e custam caro
-  // de desenhar, então nesse zoom o quadrado sólido assume de volta.
-  const legible = cell >= 6;
-  const useImage = cellImage && legible;
-  const useGlyph = !useImage && glyph && legible;
+  // de desenhar, então nesse zoom o quadrado sólido assume de volta. Com
+  // dois caracteres ("ha") cabe menos coisa em cada célula, então o piso
+  // sobe junto.
+  const useImage = cellImage && cell >= 6;
+  const useGlyph = !useImage && glyph && cell >= (glyph.length > 1 ? 9 : 6);
 
   if (useImage) {
     // A imagem é reduzida uma vez para o tamanho da célula; o laço então só
@@ -440,14 +535,23 @@ function draw() {
       }
     }
   } else if (useGlyph) {
-    ctx.font = `${(cell * 0.92).toFixed(1)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+    // Monoespaçada tem ~0,6 de largura por altura, então dois caracteres
+    // passariam da célula na fonte cheia: encolhe para caber sem invadir a
+    // vizinha.
+    const fontPx = cell * (glyph.length > 1 ? 0.68 : 0.92);
+    ctx.font = `${fontPx.toFixed(1)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let r = r0; r < r1; r++) {
       const row = wrap(r, ROWS) * COLS;
       const sy = (r - view.y) * cell + cell / 2;
       for (let c = c0; c < c1; c++) {
-        if (grid[row + wrap(c, COLS)]) {
+        const i = row + wrap(c, COLS);
+        if (grid[i]) {
+          if (pal) {
+            const k = ageMode ? age[i] : psyIndex(c, r);
+            if (k !== lastK) { lastK = k; ctx.fillStyle = pal[k]; }
+          }
           ctx.fillText(glyph, (c - view.x) * cell + cell / 2, sy);
         }
       }
@@ -458,7 +562,12 @@ function draw() {
       const row = wrap(r, ROWS) * COLS;
       const sy = (r - view.y) * cell;
       for (let c = c0; c < c1; c++) {
-        if (grid[row + wrap(c, COLS)]) {
+        const i = row + wrap(c, COLS);
+        if (grid[i]) {
+          if (pal) {
+            const k = ageMode ? age[i] : psyIndex(c, r);
+            if (k !== lastK) { lastK = k; ctx.fillStyle = pal[k]; }
+          }
           ctx.fillRect((c - view.x) * cell, sy, size, size);
         }
       }
@@ -495,6 +604,20 @@ function recount() {
 function loop(now) {
   requestAnimationFrame(loop);
   let dirty = false;
+
+  // As cores balançam mesmo com a simulação pausada. A paleta só é refeita
+  // quando o deslocamento andou o bastante para mudar alguma cor de fato —
+  // no balanço lento, isso é bem menos de uma vez por quadro.
+  if (psyMode) {
+    psyTime += Math.min(0.1, (now - lastHueTime) / 1000);
+    lastHueTime = now;
+    const h = PSY_SWING * Math.sin(psyTime * 2 * Math.PI / PSY_CYCLE);
+    if (Math.abs(h - psyHue) >= 0.4) {
+      psyHue = h;
+      buildPsyPalette();
+      dirty = true;
+    }
+  }
 
   // A cor desliza mesmo com a simulação pausada.
   if (changeMode) {
@@ -579,6 +702,7 @@ canvas.addEventListener('pointerdown', e => {
   // O primeiro clique define se o arrasto pinta ou apaga.
   paintValue = grid[idx(c.x, c.y)] ? 0 : 1;
   grid[idx(c.x, c.y)] = paintValue;
+  age[idx(c.x, c.y)] = 0;      // pintada agora, nasce agora
   lastCell = c;
   recount();
   draw();
@@ -611,6 +735,7 @@ canvas.addEventListener('pointermove', e => {
   const c = cellAt(e);
   if (!c || (lastCell && c.x === lastCell.x && c.y === lastCell.y)) return;
   grid[idx(c.x, c.y)] = paintValue;
+  age[idx(c.x, c.y)] = 0;
   lastCell = c;
   recount();
   draw();
@@ -702,6 +827,7 @@ function stepOnce() {
 document.getElementById('clearBtn').onclick = () => {
   setRunning(false);
   grid.fill(0);
+  age.fill(0);
   generation = 0;
   aliveCount = 0;
   draw();
@@ -801,6 +927,7 @@ function randomize() {
   }
 
   fillSoup(grid, COLS, ROWS, best);
+  age.fill(0);          // sopa nova: todo mundo recém-nascido
   generation = 0;
   recount();
   draw();
@@ -858,6 +985,12 @@ glyphInput.oninput = e => {
   draw();
 };
 
+// Troca o caractere por código, mantendo o campo em dia com o que se vê.
+function setGlyph(g) {
+  glyph = g;
+  glyphInput.value = g;
+}
+
 const imgClearBtn = document.getElementById('imgClearBtn');
 
 document.getElementById('imgInput').onchange = e => {
@@ -889,13 +1022,57 @@ imgClearBtn.onclick = () => {
   toast('Voltou ao quadrado');
 };
 
+// Os três modos de cor pintam a mesma coisa de jeitos incompatíveis, então
+// ligar um desliga os outros.
 const changeBtn = document.getElementById('changeBtn');
+const ageBtn = document.getElementById('ageBtn');
+const psyBtn = document.getElementById('psyBtn');
+
+function syncColorModes() {
+  changeBtn.classList.toggle('off', !changeMode);
+  ageBtn.classList.toggle('off', !ageMode);
+  psyBtn.classList.toggle('off', !psyMode);
+  draw();
+}
+
 changeBtn.onclick = () => {
   changeMode = !changeMode;
-  changeBtn.classList.toggle('off', !changeMode);
+  if (changeMode) ageMode = psyMode = false;
+  syncColorModes();
   if (!changeMode) return toast('Cor das células fixada');
   seedCycle();
   toast('Colorir: as células mudam de cor devagar (uma volta a cada 2 min)');
+};
+
+ageBtn.onclick = () => {
+  ageMode = !ageMode;
+  if (ageMode) changeMode = psyMode = false;
+  syncColorModes();
+  toast(ageMode
+    ? 'Idade: a célula nasce escura e clareia a cada geração que sobrevive'
+    : 'Idade desligada');
+};
+
+// O modo vem com o "ha" desenhado nas células — mas é só um ponto de
+// partida: trocar o campo Char depois manda, e desligar o modo só devolve o
+// caractere anterior se o "ha" ainda estiver lá intocado.
+const PSY_GLYPH = 'ha';
+let glyphBeforePsy = null;
+
+psyBtn.onclick = () => {
+  psyMode = !psyMode;
+  if (psyMode) {
+    changeMode = ageMode = false;
+    lastHueTime = performance.now();
+    psyTime = 0;
+    glyphBeforePsy = glyph;
+    setGlyph(PSY_GLYPH);
+  } else if (glyphBeforePsy !== null && glyph === PSY_GLYPH) {
+    setGlyph(glyphBeforePsy);
+    glyphBeforePsy = null;
+  }
+  syncColorModes();
+  toast(psyMode ? 'Psicodélico 🌀 ha ha ha' : 'Psicodélico desligado');
 };
 
 // Faz o ciclo partir da cor atual das células.
@@ -1446,8 +1623,12 @@ function stampModel(m, ox, oy) {
       grid[idx(wrap(ox + x, COLS), wrap(oy + y, ROWS))] = 0;
     }
   }
+  // Modelo recém-posto entra como recém-nascido, sem herdar a idade de quem
+  // ocupava o lugar.
   for (const [x, y] of m.cells) {
-    grid[idx(wrap(ox + x, COLS), wrap(oy + y, ROWS))] = 1;
+    const i = idx(wrap(ox + x, COLS), wrap(oy + y, ROWS));
+    grid[i] = 1;
+    age[i] = 0;
   }
 }
 
@@ -1652,6 +1833,7 @@ function drawPalette() {
 // outros — uma alternativa à sopa aleatória, que só vira caos indistinto.
 function scatterModels() {
   grid.fill(0);
+  age.fill(0);
   generation = 0;
 
   // 1 em N: em vez da semeadura, um exemplar só, no meio da tela.
@@ -1756,6 +1938,8 @@ document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === 'm') return document.getElementById('modelBtn').click();
   if (e.key === 'x') return document.getElementById('rndColorBtn').click();
+  if (e.key === 'a') return ageBtn.click();
+  if (e.key === 'p') return psyBtn.click();
   if (e.key === 'i') return infiniteBtn.click();
   if (e.key === 'b') return edgeBtn.click();
   if (e.key === '0') return resetView();
@@ -1776,6 +1960,7 @@ window.addEventListener('resize', () => {
 });
 
 resize();
+if (isTouch) fitView();   // no celular, abre com o mundo inteiro na tela
 setRunning(true);
 seedCycle();        // o ciclo de cor já começa ligado
 
