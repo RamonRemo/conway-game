@@ -1,7 +1,7 @@
 # Jogo da Vida
 
 Um Jogo da Vida de Conway feito para rodar em tela cheia como papel de parede vivo.
-Um arquivo, 34 KB, zero dependências — abre no navegador e pronto.
+Um arquivo, 67 KB, zero dependências — abre no navegador e pronto.
 
 **▶ [Jogar](https://ramonremo.github.io/conway-game/)**
 
@@ -13,26 +13,10 @@ Um arquivo, 34 KB, zero dependências — abre no navegador e pronto.
 
 ---
 
-
-### Atalhos
-
-| Tecla | Ação |
-|---|---|
-| `Espaço` | play / pause |
-| `S` | avança uma geração |
-| `R` | sopa aleatória |
-| `C` | limpa tudo |
-| `M` | insere um modelo aleatório |
-| `X` | sorteia as cores |
-| `G` | liga/desliga a grade |
-| `0` | centraliza a câmera |
-| `F` | tela cheia |
-
-
 ## O que é
 
 Em 1970 o matemático John Conway inventou um jogo sem jogadores. O tabuleiro é uma
-grade infinita de células vivas ou mortas, e tudo obedece a **quatro regras**:
+grade de células vivas ou mortas, e tudo obedece a **quatro regras**:
 
 | Situação | Resultado |
 |---|---|
@@ -46,6 +30,9 @@ pulsam para sempre, canhões que disparam sem parar e padrões de sete células 
 levam cinco mil gerações para se acalmar. O Jogo da Vida é Turing-completo: dá para
 construir um computador inteiro dentro dele.
 
+São **58 modelos** na galeria, do Blinker de 3 células ao Max, que preenche o plano
+inteiro com listras.
+
 ## Como usar
 
 | Ação | Como |
@@ -56,91 +43,78 @@ construir um computador inteiro dentro dele.
 | Mover a câmera | Shift+arraste, botão do meio ou botão direito |
 | Controles | Aproxime o mouse do topo da tela |
 
-No celular: **⋯** no canto abre a barra, um dedo desenha, dois dedos movem e dão pinça de zoom.
+No celular: **⋯** no canto abre a barra, um dedo desenha, dois dedos movem e dão
+pinça de zoom.
+
+### Atalhos
+
+| Tecla | Ação |
+|---|---|
+| `Espaço` | play / pause |
+| `S` | avança uma geração |
+| `R` | sopa aleatória |
+| `C` | limpa tudo |
+| `M` | insere um modelo aleatório |
+| `X` | sorteia as cores |
+| `G` | liga/desliga a grade |
+| `I` | modo infinito |
+| `B` | bordas fechadas |
+| `0` | centraliza a câmera |
+| `F` | tela cheia |
 
 ### Botões
 
-- **⬡ Modelo** — solta um dos 33 modelos da galeria num ponto aleatório da tela,
-  abrindo uma clareira ao redor para ele nascer limpo
-- **⁂ Semear** — limpa tudo e espalha ~60 modelos pelo mundo, bem separados;
-  é a sopa aleatória, mas feita de coisas que sabem o que estão fazendo
+- **⬡ Modelo** — solta um modelo da galeria num ponto aleatório da tela, abrindo uma
+  clareira ao redor para ele nascer limpo
+- **⁂ Semear** — limpa tudo e povoa o mundo com dezenas de modelos
+- **∞ Infinito** — vigia a população e injeta modelos novos sempre que o mundo
+  assenta, para a tela nunca parar
+- **⊘ Sem passagem** — fecha as bordas: quem cruza o limite deixa de existir, em vez
+  de reaparecer do outro lado
 - **🌈 Colorir** — a cor das células desliza continuamente, uma volta a cada 2 minutos
-  (ligado por padrão; o ciclo parte da cor atual e mexe só na matiz, preservando o
-  contraste com o fundo)
+  (ligado por padrão)
 - **🎨 Cores** — sorteia fundo e células com contraste garantido
+- **Char** — desenha as células com qualquer caractere ou emoji
+- **🖼 Imagem** — usa uma imagem do seu computador como célula (fica só no navegador,
+  nada é enviado para lugar nenhum)
 
-## A galeria
+## A estatística por trás
 
-Os 33 modelos, todos com as coordenadas **verificadas por simulação** (veja abaixo):
+O que separa "aleatório" de "interessante" aqui é quase todo amostragem. Quatro
+técnicas fazem o trabalho:
 
-**Metusaléns** — caos a partir de quase nada
-`R-pentomino` (5 células, 1103 gerações) · `Acorn` (7 células viram 633 em 5206) ·
-`Rabbits` (17331 gerações) · `Diehard` (some sem deixar rastro em 130) ·
-`Thunderbird` · `B-heptomino` · `Pi-heptomino` · `Century`
+**Amostragem estratificada com jitter** — no Semear, o mundo é dividido numa grade e
+cada célula recebe uma peça em posição sorteada dentro dela. Posições uniformes
+parecem certas mas não são: pontos verdadeiramente independentes formam aglomerados
+e deixam buracos grandes. A estratificação garante cobertura sem parecer alinhado.
+É o mesmo truque da amostragem de pixels em ray tracing.
 
-**Osciladores** — pulsam para sempre
-`Blinker` (p2) · `Toad` (p2) · `Beacon` (p2) · `Cross` (p3) · `Pulsar` (p3) ·
-`Octagon II` (p5) · `Figure eight` (p8) · `Galáxia de Kok` (p8) · `Pentadecathlon` (p15)
+**Processo de aglomeração (Thomas / Neyman–Scott)** — em 35% das semeaduras o layout
+inverte: 3 a 7 pontos-pai, e as peças caem ao redor deles com desvio gaussiano de 14
+a 30 células. Cria bairros densos separados por vazio, e o que escapa de um bairro
+viaja pelo deserto até colidir com o vizinho.
 
-**Naves** — atravessam o mundo
-`Glider` · `LWSS` · `MWSS` · `HWSS` (todas c/2) · `Copperhead` (c/10, rara)
+**Melhor de k (rejection sampling com função de aptidão)** — o botão Aleatório sorteia
+6 receitas de sopa, roda cada uma 100 gerações num tabuleiro de teste de 200×120 e usa
+no mundo só a que mais fervia. A pontuação é `população + 2 × agitação`, onde agitação
+conta quantas células mudaram de estado nas últimas 30 gerações — população sozinha
+premiaria um campo entulhado de blocos parados.
 
-**Crescimento infinito** — nunca param
-`Gosper Glider Gun` (um glider a cada 30 gerações) · `Crescimento infinito`
-(13 células, população cresce para sempre)
+O detalhe que faz isso funcionar: os candidatos variam **parâmetros** (densidade de 10%
+a 45%, simetria, manchas), não apenas a semente. Sopas da mesma receita num mundo de
+130 mil células se comportam quase igual — lei dos grandes números — e escolher entre
+elas não adiantaria nada. A busca é no espaço de receitas. Medido, rende 24% acima do
+tiro único, por 108 ms de custo.
 
-**Retas** — o mínimo que rende algo
-`Linha 8` · `Linha 25` · `Linha 30`
+**Ruído de valor** — metade das sopas tem a densidade modulada por uma grade grossa de
+aleatórios interpolada, criando regiões densas e ralas em vez de estática uniforme.
 
-**Caleidoscópios I–VI** — encontrados por busca
-Sopas com simetria de quatro eixos. Como as regras da Vida preservam simetria, a
-evolução inteira fica espelhada — de 154 a 498 gerações de caleidoscópio antes de
-assentar. Foram achados varrendo 4000 sementes e medindo a longevidade de cada uma.
+E uma que não é estatística mas é o maior ganho isolado: **cada peça colocada recebe
+uma das 8 simetrias do quadrado** (4 rotações × espelhada). Sem isso todo glider do
+mundo voa para o mesmo canto.
 
-## Sobre os números
-
-Todo valor de geração citado acima foi **medido**, não copiado de memória. Um
-simulador esparso de grid infinito roda cada padrão até a população se tornar
-periódica, e o resultado é comparado com o valor canônico conhecido:
-
-```
-R-pentomino    estabiliza ~1104  (canônico 1103) ✓
-Acorn          estabiliza ~5207  (canônico 5206) ✓
-Rabbits        estabiliza ~17332 (canônico 17331) ✓
-Diehard        morre na geração 130               ✓
-Copperhead     nave de período 10, 28 células     ✓
-```
-
-Isso pegou erros reais: `Bunnies` e `Queen Bee Shuttle` deram 14 e 48 gerações em
-vez das milhares esperadas — minhas coordenadas estavam erradas, e os dois ficaram
-de fora em vez de entrarem quebrados. `Spark coil` e `Herschel` caíram pelo mesmo
-motivo.
-
-O padrão de crescimento infinito foi confirmado até a geração 40000: população de
-203 → 4540, crescendo linearmente a ~0,11 célula por geração.
-
-## Detalhes técnicos
-
-**Um `index.html`.** Sem build, sem npm, sem CDN. Todo o CSS e JS é inline, e não
-há uma única requisição de rede — funciona offline e sobe em qualquer host estático.
-
-**Dois buffers, zero alocação.** O tabuleiro são dois `Uint8Array` fixos; cada
-geração escreve no buffer de trás e troca os ponteiros. Nada é alocado no laço, então
-não há pressão de garbage collector mesmo a 60 gerações por segundo.
-
-**Mundo finito e toroidal.** O grid tem tamanho fixo (tela ÷ 4 células, ~480×270 em
-1080p, 0,25 MB nos dois buffers) e as bordas dão a volta: o que sai pela direita
-entra pela esquerda. Isso garante teto de memória — um grid verdadeiramente infinito
-cresceria sem limite com um canhão ligado. O custo é fidelidade: metusaléns não
-reproduzem a evolução canônica depois que os destroços dão a volta no mundo.
-
-**Câmera separada da simulação.** A simulação não sabe que existe zoom; só o desenho
-e o clique consultam a câmera `{x, y, cell}`. O zoom da roda é ancorado no cursor
-(converte para coordenada de mundo, escala, recalcula a origem), e a câmera é presa
-dentro do mundo para nunca aparecer o tabuleiro repetido.
-
-**Desenho por área visível.** Só as células dentro da tela são desenhadas — aproximar
-o zoom acelera o render em vez de pesar.
+As dimensões são independentes e se combinam: a **paleta** decide *quais* modelos
+(1, 2, 3 ou todos), o **layout** decide *onde* (estratificado ou aglomerado).
 
 ## Rodando local
 
@@ -149,6 +123,11 @@ git clone https://github.com/ramonremo/conway-game.git
 cd conway-game
 xdg-open index.html      # ou simplesmente abra o arquivo no navegador
 ```
+
+## Créditos
+
+Padrões da galeria vindos do acervo de [conwaylife.com](https://conwaylife.com),
+via o espelho [copy.sh/life](https://copy.sh/life/).
 
 ## Licença
 
