@@ -89,6 +89,60 @@
     transition: opacity 0.6s ease;
   }
   #hint.gone { opacity: 0; }
+
+  /* Botão flutuante que abre a barra onde não existe hover (celular). */
+  #barToggle {
+    display: none;
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 11;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 18px;
+    line-height: 1;
+    opacity: 0.8;
+  }
+
+  .only-touch { display: none; }
+
+  @media (hover: none) {
+    /* Sem hover a faixa do topo não serve para nada e ainda rouba o toque
+       de quem quer desenhar ali — some, e o botão flutuante assume. */
+    #trigger { display: none; }
+    #barToggle { display: block; }
+    .only-mouse { display: none; }
+    .only-touch { display: inline; }
+    body.idle { cursor: auto; }
+  }
+
+  @media (max-width: 760px) {
+    #bar {
+      gap: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      /* Com muitos controles a barra passa da tela: rola dentro de si. */
+      max-height: 72vh;
+      overflow-y: auto;
+    }
+    #bar .sep { display: none; }
+    #bar button { padding: 6px 10px; }
+    #bar label { gap: 4px; }
+    input[type=range] { width: 82px; }
+    input[type=color] { width: 34px; height: 30px; }
+    #hint {
+      font-size: 11px;
+      bottom: 70px;
+      padding: 0 70px 0 14px;
+    }
+  }
+
+  @media (max-width: 400px) {
+    #bar { font-size: 11px; }
+    input[type=range] { width: 68px; }
+  }
 </style>
 </head>
 <body>
@@ -102,6 +156,7 @@
   <button id="clearBtn">Limpar</button>
   <div class="sep"></div>
   <label>Vel <input type="range" id="speed" min="1" max="60" value="12"></label>
+  <label>Zoom <input type="range" id="zoom" min="4" max="60" value="10"></label>
   <button id="gridBtn">Grade</button>
   <div class="sep"></div>
   <label>Fundo <input type="color" id="bgColor" value="#000000"></label>
@@ -115,7 +170,12 @@
   <div class="status">Ger <b id="gen">0</b> · Vivas <b id="alive">0</b></div>
 </div>
 
-<p id="hint">Mouse no topo = controles · clique = desenhar · roda = zoom no cursor · Shift+arraste ou botão do meio = mover · 0 = centralizar · Espaço = play/pause · M = modelo · X = cores</p>
+<button id="barToggle" aria-label="Mostrar controles">⋯</button>
+
+<p id="hint">
+  <span class="only-mouse">Mouse no topo = controles · clique = desenhar · roda = zoom no cursor · Shift+arraste ou botão do meio = mover · 0 = centralizar · Espaço = play/pause · M = modelo · X = cores</span>
+  <span class="only-touch">Toque no ⋯ para os controles · arraste na tela para desenhar · dois dedos para mover</span>
+</p>
 
 <script>
 const canvas = document.getElementById('board');
@@ -221,6 +281,7 @@ function zoomAt(newCell, sx, sy) {
   view.x = wx - sx / newCell;
   view.y = wy - sy / newCell;
   clampView();
+  syncZoomSlider();
   draw();
 }
 
@@ -230,6 +291,7 @@ function resetView() {
   view.x = (COLS - window.innerWidth / view.cell) / 2;
   view.y = (ROWS - window.innerHeight / view.cell) / 2;
   clampView();
+  syncZoomSlider();
   draw();
 }
 
@@ -356,7 +418,32 @@ function cellAt(e) {
 
 let panning = false, panStart = null;
 
+// Toque: um dedo desenha, dois dedos movem e dão zoom (pinça). Guardamos
+// todos os ponteiros ativos para saber em qual dos dois casos estamos.
+const pointers = new Map();
+let gesture = null;
+
+function gestureState() {
+  const [a, b] = [...pointers.values()];
+  return {
+    dist: Math.hypot(a.x - b.x, a.y - b.y),
+    midX: (a.x + b.x) / 2,
+    midY: (a.y + b.y) / 2,
+  };
+}
+
 canvas.addEventListener('pointerdown', e => {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    // Chegou o segundo dedo: vira gesto de câmera, o desenho é abortado.
+    painting = false;
+    panning = false;
+    lastCell = null;
+    gesture = gestureState();
+    return;
+  }
+  if (pointers.size > 2) return;
+
   // Botão do meio, direito ou Shift+esquerdo arrastam a câmera.
   if (e.button === 1 || e.button === 2 || e.shiftKey) {
     e.preventDefault();
@@ -379,6 +466,21 @@ canvas.addEventListener('pointerdown', e => {
 });
 
 canvas.addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size >= 2 && gesture) {
+    const g = gestureState();
+    // Arrasta pelo deslocamento do ponto médio…
+    view.x -= (g.midX - gesture.midX) / view.cell;
+    view.y -= (g.midY - gesture.midY) / view.cell;
+    clampView();
+    // …e dá zoom pela variação da distância entre os dedos, ancorado neles.
+    if (gesture.dist > 0) zoomAt(view.cell * (g.dist / gesture.dist), g.midX, g.midY);
+    gesture = g;
+    draw();
+    return;
+  }
+
   if (panning) {
     view.x = panStart.vx - (e.clientX - panStart.sx) / view.cell;
     view.y = panStart.vy - (e.clientY - panStart.sy) / view.cell;
@@ -395,9 +497,15 @@ canvas.addEventListener('pointermove', e => {
   draw();
 });
 
-const stopPainting = () => { painting = false; panning = false; lastCell = null; };
-canvas.addEventListener('pointerup', stopPainting);
-canvas.addEventListener('pointercancel', stopPainting);
+function releasePointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) gesture = null;
+  painting = false;
+  panning = false;
+  lastCell = null;
+}
+canvas.addEventListener('pointerup', releasePointer);
+canvas.addEventListener('pointercancel', releasePointer);
 
 // Arrastar com o botão direito não deve abrir o menu de contexto.
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -423,6 +531,12 @@ function hideBarSoon() {
   clearTimeout(barTimer);
   barTimer = setTimeout(() => bar.classList.remove('show'), 500);
 }
+
+document.getElementById('barToggle').addEventListener('click', e => {
+  e.stopPropagation();
+  clearTimeout(barTimer);
+  bar.classList.toggle('show');
+});
 
 trigger.addEventListener('pointerenter', showBar);
 trigger.addEventListener('pointerleave', hideBarSoon);
@@ -483,6 +597,17 @@ function randomize() {
 document.getElementById('randomBtn').onclick = randomize;
 
 document.getElementById('speed').oninput = e => { fps = +e.target.value; };
+
+// O slider dá zoom no centro da tela — é o caminho no celular, onde não
+// há roda do mouse. A roda continua ancorando no cursor.
+const zoomSlider = document.getElementById('zoom');
+zoomSlider.oninput = e => {
+  zoomAt(+e.target.value, window.innerWidth / 2, window.innerHeight / 2);
+};
+
+function syncZoomSlider() {
+  zoomSlider.value = Math.round(view.cell);
+}
 
 const gridBtn = document.getElementById('gridBtn');
 gridBtn.onclick = () => {
