@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jogo da Vida — Conway</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    color: #fff;
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  body.idle { cursor: none; }
+
+  canvas {
+    display: block;
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+  }
+
+  /* Faixa invisível no topo que revela a barra ao aproximar o mouse. */
+  #trigger {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 90px;
+    z-index: 5;
+  }
+
+  #bar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 10;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 16px;
+    background: rgba(0, 0, 0, 0.85);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(6px);
+    transform: translateY(-105%);
+    opacity: 0;
+    transition: transform 0.28s ease, opacity 0.28s ease;
+  }
+  #bar.show { transform: translateY(0); opacity: 1; }
+
+  button, select {
+    font: inherit;
+    background: #000;
+    color: #fff;
+    border: 1px solid #fff;
+    padding: 5px 12px;
+    cursor: pointer;
+  }
+  button:hover, select:hover { background: #fff; color: #000; }
+  button.off { opacity: 0.4; }
+  label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  input[type=range] { accent-color: #fff; width: 110px; }
+  input[type=color] {
+    width: 30px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid #fff;
+    background: #000;
+    cursor: pointer;
+  }
+  input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+  input[type=color]::-webkit-color-swatch { border: none; }
+  input[type=color]::-moz-color-swatch { border: none; }
+  .sep { width: 1px; height: 22px; background: rgba(255,255,255,0.35); }
+  .status { opacity: 0.65; white-space: nowrap; }
+  .status b { font-weight: 600; }
+
+  #hint {
+    position: fixed;
+    bottom: 18px; left: 0; right: 0;
+    text-align: center;
+    z-index: 4;
+    opacity: 0.5;
+    pointer-events: none;
+    transition: opacity 0.6s ease;
+  }
+  #hint.gone { opacity: 0; }
+</style>
+</head>
+<body>
+
+<canvas id="board"></canvas>
+<div id="trigger"></div>
+
+<div id="bar">
+  <button id="playBtn">❚❚ Pause</button>
+  <button id="randomBtn">Aleatório</button>
+  <button id="clearBtn">Limpar</button>
+  <div class="sep"></div>
+  <label>Vel <input type="range" id="speed" min="1" max="60" value="12"></label>
+  <button id="gridBtn">Grade</button>
+  <div class="sep"></div>
+  <label>Fundo <input type="color" id="bgColor" value="#000000"></label>
+  <label>Células <input type="color" id="cellColor" value="#ffffff"></label>
+  <button id="changeBtn" class="off">🌈 Change</button>
+  <button id="rndColorBtn">🎨 Cores</button>
+  <div class="sep"></div>
+  <button id="modelBtn">⬡ Modelo</button>
+  <button id="seedBtn">⁂ Semear</button>
+  <div class="sep"></div>
+  <div class="status">Ger <b id="gen">0</b> · Vivas <b id="alive">0</b></div>
+</div>
+
+<p id="hint">Mouse no topo = controles · clique = desenhar · roda = zoom no cursor · Shift+arraste ou botão do meio = mover · 0 = centralizar · Espaço = play/pause · M = modelo · X = cores</p>
+
+<script>
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+
+const BASE_CELL = 10;   // tamanho da célula com a câmera em 100%
+const FIT_CELL = 4;     // no zoom mínimo o mundo inteiro cabe na tela
+const MAX_CELL = 60;
+
+// O mundo é maior que a janela (tela ÷ FIT_CELL células), então afastar
+// revela espaço de verdade em vez de repetir o mesmo padrão.
+
+let COLS = 0, ROWS = 0;
+
+// Câmera: (x, y) é a coordenada do mundo, em células, colada no canto
+// superior esquerdo da tela; `cell` é quantos pixels cada célula ocupa.
+// A simulação não sabe da câmera — só o desenho e o clique a consultam.
+const view = { x: 0, y: 0, cell: BASE_CELL };
+
+// Dois buffers fixos: step() escreve no de trás e troca os ponteiros,
+// então nenhuma memória é alocada por geração.
+let grid = new Uint8Array(0);
+let back = new Uint8Array(0);
+
+let generation = 0;
+let running = true;
+let showGrid = true;
+let fps = 12;
+let lastFrame = 0;
+let aliveCount = 0;
+let bgColor = '#000000';
+let cellColor = '#ffffff';
+
+// Modo "change": a matiz das células desliza continuamente. Guardamos
+// saturação e luminosidade para o ciclo não mexer no contraste com o fundo.
+const HUE_PER_SEC = 3;        // uma volta completa a cada 2 min
+let changeMode = false;
+let cycleHue = 0, cycleSat = 85, cycleLight = 62;
+let lastHueTime = 0;
+
+const idx = (x, y) => y * COLS + x;
+
+// --- dimensionamento ------------------------------------------------------
+
+// O mundo tem tamanho próprio, independente do zoom: só cresce se a janela
+// passar a exigir mais células a 100%. Assim dar zoom não destrói o padrão.
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth, h = window.innerHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const needCols = Math.max(1, Math.ceil(w / FIT_CELL));
+  const needRows = Math.max(1, Math.ceil(h / FIT_CELL));
+
+  if (needCols > COLS || needRows > ROWS) {
+    const oldCols = COLS, oldRows = ROWS, old = grid;
+    COLS = Math.max(COLS, needCols);
+    ROWS = Math.max(ROWS, needRows);
+    grid = new Uint8Array(COLS * ROWS);
+    back = new Uint8Array(COLS * ROWS);
+
+    for (let y = 0; y < oldRows; y++) {
+      for (let x = 0; x < oldCols; x++) {
+        grid[y * COLS + x] = old[y * oldCols + x];
+      }
+    }
+    recount();
+  }
+  clampView();
+  draw();
+}
+
+// --- câmera ---------------------------------------------------------------
+
+const wrap = (v, n) => ((v % n) + n) % n;
+
+// Zoom mínimo: aquele em que o mundo inteiro cabe na tela. Abaixo disso
+// sobraria vazio (ou repetição), então é o limite.
+function minCell() {
+  return Math.max(window.innerWidth / COLS, window.innerHeight / ROWS);
+}
+
+// Prende a câmera dentro do mundo, para nunca aparecer o mundo repetido.
+function clampView() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const visCols = w / view.cell, visRows = h / view.cell;
+  view.x = visCols >= COLS ? (COLS - visCols) / 2
+                           : Math.max(0, Math.min(COLS - visCols, view.x));
+  view.y = visRows >= ROWS ? (ROWS - visRows) / 2
+                           : Math.max(0, Math.min(ROWS - visRows, view.y));
+}
+
+// Aplica um novo tamanho de célula mantendo fixo o ponto do mundo que está
+// sob (sx, sy) na tela — é isso que faz o zoom "puxar" para o cursor.
+function zoomAt(newCell, sx, sy) {
+  newCell = Math.max(minCell(), Math.min(MAX_CELL, newCell));
+  if (newCell === view.cell) return;
+  const wx = view.x + sx / view.cell;
+  const wy = view.y + sy / view.cell;
+  view.cell = newCell;
+  view.x = wx - sx / newCell;
+  view.y = wy - sy / newCell;
+  clampView();
+  draw();
+}
+
+// Volta a 100%, olhando para o centro do mundo (onde os modelos nascem).
+function resetView() {
+  view.cell = Math.max(minCell(), BASE_CELL);
+  view.x = (COLS - window.innerWidth / view.cell) / 2;
+  view.y = (ROWS - window.innerHeight / view.cell) / 2;
+  clampView();
+  draw();
+}
+
+// --- regras ---------------------------------------------------------------
+
+// Vizinhança de Moore com bordas em toro (o tabuleiro dá a volta).
+function step() {
+  const next = back;
+  let count = 0;
+  for (let y = 0; y < ROWS; y++) {
+    const up = ((y - 1 + ROWS) % ROWS) * COLS;
+    const mid = y * COLS;
+    const down = ((y + 1) % ROWS) * COLS;
+    for (let x = 0; x < COLS; x++) {
+      const l = (x - 1 + COLS) % COLS;
+      const r = (x + 1) % COLS;
+      const n = grid[up + l] + grid[up + x] + grid[up + r]
+              + grid[mid + l]              + grid[mid + r]
+              + grid[down + l] + grid[down + x] + grid[down + r];
+      const alive = grid[mid + x];
+      const v = (alive && (n === 2 || n === 3)) || (!alive && n === 3) ? 1 : 0;
+      next[mid + x] = v;
+      count += v;
+    }
+  }
+  back = grid;
+  grid = next;
+  aliveCount = count;
+  generation++;
+}
+
+// --- desenho --------------------------------------------------------------
+
+// Linhas da grade: a cor das células bem apagada, pra acompanhar o tema.
+function gridLineColor() {
+  const n = parseInt(cellColor.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, 0.14)`;
+}
+
+function draw() {
+  const w = window.innerWidth, h = window.innerHeight;
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, w, h);
+
+  const cell = view.cell;
+  // Só as células que caem na tela; fora dos limites o mundo se repete,
+  // coerente com as bordas em toro da simulação.
+  const c0 = Math.floor(view.x), c1 = Math.ceil(view.x + w / cell);
+  const r0 = Math.floor(view.y), r1 = Math.ceil(view.y + h / cell);
+
+  ctx.fillStyle = cellColor;
+  const size = Math.ceil(cell);
+  for (let r = r0; r < r1; r++) {
+    const row = wrap(r, ROWS) * COLS;
+    const sy = (r - view.y) * cell;
+    for (let c = c0; c < c1; c++) {
+      if (grid[row + wrap(c, COLS)]) {
+        ctx.fillRect((c - view.x) * cell, sy, size, size);
+      }
+    }
+  }
+
+  if (showGrid && cell >= 5) {
+    ctx.strokeStyle = gridLineColor();
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let c = c0; c <= c1; c++) {
+      const sx = Math.round((c - view.x) * cell) + 0.5;
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx, h);
+    }
+    for (let r = r0; r <= r1; r++) {
+      const sy = Math.round((r - view.y) * cell) + 0.5;
+      ctx.moveTo(0, sy);
+      ctx.lineTo(w, sy);
+    }
+    ctx.stroke();
+  }
+
+  document.getElementById('gen').textContent = generation;
+  document.getElementById('alive').textContent = aliveCount;
+}
+
+function recount() {
+  let c = 0;
+  for (let i = 0; i < grid.length; i++) c += grid[i];
+  aliveCount = c;
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  let dirty = false;
+
+  // A cor desliza mesmo com a simulação pausada.
+  if (changeMode) {
+    const dt = Math.min(0.1, (now - lastHueTime) / 1000);
+    lastHueTime = now;
+    cycleHue = (cycleHue + dt * HUE_PER_SEC) % 360;
+    cellColor = hsl(cycleHue, cycleSat, cycleLight);
+    cellInput.value = cellColor;
+    dirty = true;
+  }
+
+  if (running && now - lastFrame >= 1000 / fps) {
+    lastFrame = now;
+    step();
+    dirty = true;
+  }
+
+  if (dirty) draw();
+}
+
+// --- interação ------------------------------------------------------------
+
+let painting = false, paintValue = 1, lastCell = null;
+
+// Tela → célula do mundo, atravessando a câmera. Sempre acerta alguma
+// célula: coordenadas fora dos limites voltam pelo outro lado do toro.
+function cellAt(e) {
+  const x = wrap(Math.floor(view.x + e.clientX / view.cell), COLS);
+  const y = wrap(Math.floor(view.y + e.clientY / view.cell), ROWS);
+  return { x, y };
+}
+
+let panning = false, panStart = null;
+
+canvas.addEventListener('pointerdown', e => {
+  // Botão do meio, direito ou Shift+esquerdo arrastam a câmera.
+  if (e.button === 1 || e.button === 2 || e.shiftKey) {
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    panning = true;
+    panStart = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    return;
+  }
+
+  const c = cellAt(e);
+  if (!c) return;
+  canvas.setPointerCapture(e.pointerId);
+  painting = true;
+  // O primeiro clique define se o arrasto pinta ou apaga.
+  paintValue = grid[idx(c.x, c.y)] ? 0 : 1;
+  grid[idx(c.x, c.y)] = paintValue;
+  lastCell = c;
+  recount();
+  draw();
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (panning) {
+    view.x = panStart.vx - (e.clientX - panStart.sx) / view.cell;
+    view.y = panStart.vy - (e.clientY - panStart.sy) / view.cell;
+    clampView();
+    draw();
+    return;
+  }
+  if (!painting) return;
+  const c = cellAt(e);
+  if (!c || (lastCell && c.x === lastCell.x && c.y === lastCell.y)) return;
+  grid[idx(c.x, c.y)] = paintValue;
+  lastCell = c;
+  recount();
+  draw();
+});
+
+const stopPainting = () => { painting = false; panning = false; lastCell = null; };
+canvas.addEventListener('pointerup', stopPainting);
+canvas.addEventListener('pointercancel', stopPainting);
+
+// Arrastar com o botão direito não deve abrir o menu de contexto.
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// Roda do mouse: zoom exponencial ancorado no cursor.
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  zoomAt(view.cell * factor, e.clientX, e.clientY);
+}, { passive: false });
+
+// --- barra de controles ---------------------------------------------------
+
+const bar = document.getElementById('bar');
+const trigger = document.getElementById('trigger');
+let barTimer = null;
+
+function showBar() {
+  bar.classList.add('show');
+  clearTimeout(barTimer);
+}
+function hideBarSoon() {
+  clearTimeout(barTimer);
+  barTimer = setTimeout(() => bar.classList.remove('show'), 500);
+}
+
+trigger.addEventListener('pointerenter', showBar);
+trigger.addEventListener('pointerleave', hideBarSoon);
+bar.addEventListener('pointerenter', showBar);
+bar.addEventListener('pointerleave', hideBarSoon);
+
+// Esconde o cursor quando o mouse fica parado (modo papel de parede).
+let idleTimer = null;
+document.addEventListener('pointermove', () => {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => document.body.classList.add('idle'), 2500);
+});
+
+const hint = document.getElementById('hint');
+setTimeout(() => hint.classList.add('gone'), 6000);
+
+let toastTimer = null;
+function toast(msg) {
+  hint.textContent = msg;
+  hint.classList.remove('gone');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => hint.classList.add('gone'), 4000);
+}
+
+// --- controles ------------------------------------------------------------
+
+const playBtn = document.getElementById('playBtn');
+
+function setRunning(v) {
+  running = v;
+  playBtn.textContent = running ? '❚❚ Pause' : '▶ Play';
+}
+
+playBtn.onclick = () => setRunning(!running);
+
+// Sem botão na barra: avança uma geração pela tecla S.
+function stepOnce() {
+  setRunning(false);
+  step();
+  draw();
+}
+
+document.getElementById('clearBtn').onclick = () => {
+  setRunning(false);
+  grid.fill(0);
+  generation = 0;
+  aliveCount = 0;
+  draw();
+};
+
+function randomize() {
+  for (let i = 0; i < grid.length; i++) grid[i] = Math.random() < 0.22 ? 1 : 0;
+  generation = 0;
+  recount();
+  draw();
+}
+document.getElementById('randomBtn').onclick = randomize;
+
+document.getElementById('speed').oninput = e => { fps = +e.target.value; };
+
+const gridBtn = document.getElementById('gridBtn');
+gridBtn.onclick = () => {
+  showGrid = !showGrid;
+  gridBtn.classList.toggle('off', !showGrid);
+  draw();
+};
+
+const bgInput = document.getElementById('bgColor');
+const cellInput = document.getElementById('cellColor');
+
+function applyColors() {
+  bgColor = bgInput.value;
+  cellColor = cellInput.value;
+  document.body.style.background = bgColor;
+  draw();
+}
+
+bgInput.oninput = applyColors;
+// Mexer no seletor manualmente assume o controle e encerra o ciclo.
+cellInput.oninput = () => { if (changeMode) changeBtn.click(); applyColors(); };
+
+// Hex → HSL, para o ciclo começar exatamente da cor que está na tela.
+function hexToHsl(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  if (!d) return [0, 0, l * 100];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return [((h * 60) % 360 + 360) % 360, s * 100, l * 100];
+}
+
+const changeBtn = document.getElementById('changeBtn');
+changeBtn.onclick = () => {
+  changeMode = !changeMode;
+  changeBtn.classList.toggle('off', !changeMode);
+  if (!changeMode) return toast('Cor das células fixada');
+  seedCycle();
+  toast('Change: as células mudam de cor devagar (uma volta a cada 2 min)');
+};
+
+// Faz o ciclo partir da cor atual das células.
+function seedCycle() {
+  const [h, s, l] = hexToHsl(cellColor);
+  cycleHue = h;
+  // Branco e preto não têm matiz para girar: injeta cor mantendo o brilho.
+  cycleSat = s < 35 ? 85 : s;
+  cycleLight = s < 35 ? (l > 50 ? 62 : 45) : l;
+  lastHueTime = performance.now();
+}
+
+function hsl(h, s, l) {
+  l /= 100;
+  const a = s * Math.min(l, 1 - l) / 100;
+  const f = n => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * c).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+// Sorteia um par com contraste garantido: matizes distantes e
+// luminosidades em extremos opostos.
+document.getElementById('rndColorBtn').onclick = () => {
+  const h = Math.floor(Math.random() * 360);
+  const h2 = (h + 100 + Math.floor(Math.random() * 160)) % 360;
+  const lightBg = Math.random() < 0.3;
+
+  if (lightBg) {
+    bgInput.value = hsl(h2, 30 + Math.random() * 40, 88 + Math.random() * 8);
+    cellInput.value = hsl(h, 60 + Math.random() * 40, 20 + Math.random() * 20);
+  } else {
+    bgInput.value = hsl(h2, 40 + Math.random() * 50, 4 + Math.random() * 9);
+    cellInput.value = hsl(h, 65 + Math.random() * 35, 55 + Math.random() * 25);
+  }
+  applyColors();
+  if (changeMode) seedCycle();   // o ciclo continua, agora da cor sorteada
+};
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+}
+
+// --- padrões --------------------------------------------------------------
+
+// Longevidades medidas por simulação em grid infinito (valores canônicos).
+// Num tabuleiro toroidal o desfecho é outro: o que escapa acaba voltando.
+const MODELS = [
+  { name: 'R-pentomino', note: 'metusalém · caos até a geração 1103',
+    cells: [[1,0],[2,0],[0,1],[1,1],[1,2]] },
+
+  { name: 'Acorn', note: 'metusalém · 7 células viram 633 em 5206 gerações',
+    cells: [[1,0],[3,1],[0,2],[1,2],[4,2],[5,2],[6,2]] },
+
+  { name: 'Rabbits', note: 'metusalém · sobrevive 17331 gerações',
+    cells: [[0,0],[4,0],[5,0],[6,0],[0,1],[1,1],[2,1],[5,1],[1,2]] },
+
+  { name: 'Diehard', note: 'some sem deixar rastro na geração 130',
+    cells: [[6,0],[0,1],[1,1],[1,2],[5,2],[6,2],[7,2]] },
+
+  { name: 'Thunderbird', note: 'metusalém curto · estabiliza em 243',
+    cells: [[0,0],[1,0],[2,0],[1,2],[1,3],[1,4]] },
+
+  { name: 'B-heptomino', note: 'metusalém curto · estabiliza em 148',
+    cells: [[0,0],[2,0],[3,0],[0,1],[1,1],[2,1],[1,2]] },
+
+  { name: 'Pi-heptomino', note: 'metusalém curto · estabiliza em 173',
+    cells: [[0,0],[1,0],[2,0],[0,1],[2,1],[0,2],[2,2]] },
+
+  { name: 'Gosper Glider Gun', note: 'crescimento infinito · cospe um glider a cada 30',
+    cells: [
+      [24,0],[22,1],[24,1],[12,2],[13,2],[20,2],[21,2],[34,2],[35,2],
+      [11,3],[15,3],[20,3],[21,3],[34,3],[35,3],
+      [0,4],[1,4],[10,4],[16,4],[20,4],[21,4],
+      [0,5],[1,5],[10,5],[14,5],[16,5],[17,5],[22,5],[24,5],
+      [10,6],[16,6],[24,6],
+      [11,7],[15,7],
+      [12,8],[13,8]
+    ] },
+
+  { name: 'Pulsar', note: 'oscilador de período 3',
+    cells: [
+      [2,0],[3,0],[4,0],[8,0],[9,0],[10,0],
+      [0,2],[5,2],[7,2],[12,2],
+      [0,3],[5,3],[7,3],[12,3],
+      [0,4],[5,4],[7,4],[12,4],
+      [2,5],[3,5],[4,5],[8,5],[9,5],[10,5],
+      [2,7],[3,7],[4,7],[8,7],[9,7],[10,7],
+      [0,8],[5,8],[7,8],[12,8],
+      [0,9],[5,9],[7,9],[12,9],
+      [0,10],[5,10],[7,10],[12,10],
+      [2,12],[3,12],[4,12],[8,12],[9,12],[10,12]
+    ] },
+
+  { name: 'Pentadecathlon', note: 'oscilador de período 15',
+    cells: [[2,0],[7,0],[0,1],[1,1],[3,1],[4,1],[5,1],[6,1],[8,1],[9,1],[2,2],[7,2]] },
+
+  { name: 'Glider', note: 'nave · anda 1 célula na diagonal a cada 4 gerações',
+    cells: [[1,0],[2,1],[0,2],[1,2],[2,2]] },
+
+  { name: 'Nave leve (LWSS)', note: 'nave · atravessa a tela na horizontal',
+    cells: [[0,0],[3,0],[4,1],[0,2],[4,2],[1,3],[2,3],[3,3],[4,3]] },
+];
+
+const MARGIN = 2;        // moldura limpa ao redor de cada inserção
+const SCATTER_PAD = 6;   // folga entre modelos ao semear, para não se fundirem
+
+const modelW = m => Math.max(...m.cells.map(c => c[0])) + 1;
+const modelH = m => Math.max(...m.cells.map(c => c[1])) + 1;
+
+// Carimba o modelo em (ox, oy), abrindo espaço em volta: sem isso ele
+// nasce contaminado pelo que estiver por perto e não evolui como deveria.
+function stampModel(m, ox, oy) {
+  const w = modelW(m), h = modelH(m);
+  for (let y = -MARGIN; y < h + MARGIN; y++) {
+    for (let x = -MARGIN; x < w + MARGIN; x++) {
+      grid[idx(wrap(ox + x, COLS), wrap(oy + y, ROWS))] = 0;
+    }
+  }
+  for (const [x, y] of m.cells) {
+    grid[idx(wrap(ox + x, COLS), wrap(oy + y, ROWS))] = 1;
+  }
+}
+
+// Há espaço livre para o modelo ali, contando uma folga `pad`?
+function areaFree(m, ox, oy, pad) {
+  const w = modelW(m), h = modelH(m);
+  for (let y = -pad; y < h + pad; y++) {
+    for (let x = -pad; x < w + pad; x++) {
+      if (grid[idx(wrap(ox + x, COLS), wrap(oy + y, ROWS))]) return false;
+    }
+  }
+  return true;
+}
+
+// Solta o modelo num ponto qualquer da área visível, sem apagar o resto do
+// mundo nem mexer na câmera ou no contador de gerações.
+function insertModel(m) {
+  // Sorteia dentro do que está na tela, senão o modelo cairia fora da vista.
+  const visCols = Math.min(COLS, window.innerWidth / view.cell);
+  const visRows = Math.min(ROWS, window.innerHeight / view.cell);
+  const ox = Math.floor(view.x + MARGIN + Math.random() * Math.max(1, visCols - modelW(m) - 2 * MARGIN));
+  const oy = Math.floor(view.y + MARGIN + Math.random() * Math.max(1, visRows - modelH(m) - 2 * MARGIN));
+
+  stampModel(m, ox, oy);
+  recount();
+  draw();
+  toast(`${m.name} — ${m.note}`);
+}
+
+const randomModel = () => MODELS[Math.floor(Math.random() * MODELS.length)];
+
+// Limpa tudo e espalha modelos pelo mundo inteiro, bem separados uns dos
+// outros — uma alternativa à sopa aleatória, que só vira caos indistinto.
+function scatterModels() {
+  grid.fill(0);
+  generation = 0;
+
+  const target = Math.max(4, Math.round(COLS * ROWS / 2200));
+  let placed = 0;
+  // Tenta várias vezes por modelo: quem cai em cima de outro é descartado.
+  for (let tries = 0; tries < target * 12 && placed < target; tries++) {
+    const m = randomModel();
+    const ox = Math.floor(Math.random() * COLS);
+    const oy = Math.floor(Math.random() * ROWS);
+    if (areaFree(m, ox, oy, SCATTER_PAD)) {
+      stampModel(m, ox, oy);
+      placed++;
+    }
+  }
+
+  recount();
+  draw();
+  toast(`${placed} modelos espalhados pelo mundo`);
+}
+
+document.getElementById('seedBtn').onclick = scatterModels;
+
+// Sorteia sem repetir o mesmo modelo duas vezes seguidas.
+let lastModel = -1;
+document.getElementById('modelBtn').onclick = () => {
+  let i;
+  do { i = Math.floor(Math.random() * MODELS.length); }
+  while (MODELS.length > 1 && i === lastModel);
+  lastModel = i;
+  insertModel(MODELS[i]);
+};
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'm') return document.getElementById('modelBtn').click();
+  if (e.key === 'x') return document.getElementById('rndColorBtn').click();
+  if (e.key === '0') return resetView();
+  if (e.code === 'Space') { e.preventDefault(); setRunning(!running); }
+  else if (e.key === 's') stepOnce();
+  else if (e.key === 'c') document.getElementById('clearBtn').click();
+  else if (e.key === 'r') randomize();
+  else if (e.key === 'g') gridBtn.click();
+  else if (e.key === 'f') toggleFullscreen();
+});
+
+// --- início ---------------------------------------------------------------
+
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(resize, 120);
+});
+
+resize();
+setRunning(true);   // mundo vazio, mas já rodando: basta desenhar e viver
+
+// A barra começa aberta para não ficar escondida de quem chega agora.
+// Passados 10 s ela recolhe e volta a depender do mouse no topo — a menos
+// que o ponteiro já esteja sobre ela, e aí showBar() cancela este timer.
+bar.classList.add('show');
+barTimer = setTimeout(() => bar.classList.remove('show'), 10000);
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
