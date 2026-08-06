@@ -60,7 +60,15 @@
     padding: 5px 12px;
     cursor: pointer;
   }
-  button:hover, select:hover { background: #fff; color: #000; }
+  .fakebtn {
+    font: inherit;
+    background: #000;
+    color: #fff;
+    border: 1px solid #fff;
+    padding: 5px 12px;
+    cursor: pointer;
+  }
+  button:hover, select:hover, .fakebtn:hover { background: #fff; color: #000; }
   button.off { opacity: 0.4; }
   label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   input[type=range] { accent-color: #fff; width: 110px; }
@@ -178,6 +186,10 @@
     Char <input type="text" id="glyph" maxlength="2" placeholder="■" autocomplete="off">
   </label>
   <button id="rndColorBtn">🎨 Cores</button>
+  <label id="imgBtn" class="fakebtn" title="Usar uma imagem do seu computador como célula">
+    🖼 Imagem<input type="file" id="imgInput" accept="image/*" hidden>
+  </label>
+  <button id="imgClearBtn" hidden title="Voltar ao quadrado">✕</button>
   <div class="sep"></div>
   <button id="modelBtn">⬡ Modelo</button>
   <button id="seedBtn">⁂ Semear</button>
@@ -224,6 +236,12 @@ let aliveCount = 0;
 let bgColor = '#000000';
 let cellColor = '#ffffff';
 let glyph = '';           // vazio = célula quadrada sólida
+
+// Imagem escolhida pelo usuário, desenhada no lugar da célula. Fica só na
+// memória do navegador — nada é enviado para lugar nenhum.
+let cellImage = null;
+let imgTile = null;       // a imagem já reduzida ao tamanho da célula
+let imgTileSize = 0;
 
 // Modo "change": a matiz das células desliza continuamente. Guardamos
 // saturação e luminosidade para o ciclo não mexer no contraste com o fundo.
@@ -339,6 +357,18 @@ function step() {
 
 // --- desenho --------------------------------------------------------------
 
+// Reduz a imagem escolhida para um quadrado do tamanho da célula, mantendo
+// a proporção original (sobra transparente nas bordas em vez de esticar).
+function buildImgTile(size) {
+  imgTile = document.createElement('canvas');
+  imgTile.width = imgTile.height = size;
+  const c = imgTile.getContext('2d');
+  const scale = Math.min(size / cellImage.width, size / cellImage.height);
+  const w = cellImage.width * scale, h = cellImage.height * scale;
+  c.drawImage(cellImage, (size - w) / 2, (size - h) / 2, w, h);
+  imgTileSize = size;
+}
+
 // Linhas da grade: a cor das células bem apagada, pra acompanhar o tema.
 function gridLineColor() {
   const n = parseInt(cellColor.slice(1), 16);
@@ -358,11 +388,28 @@ function draw() {
 
   ctx.fillStyle = cellColor;
 
-  // Abaixo de 6 px o caractere vira um borrão ilegível e custa caro de
-  // desenhar, então nesse zoom o quadrado sólido assume de volta.
-  const useGlyph = glyph && cell >= 6;
+  // Abaixo de 6 px imagem e caractere viram borrão ilegível e custam caro
+  // de desenhar, então nesse zoom o quadrado sólido assume de volta.
+  const legible = cell >= 6;
+  const useImage = cellImage && legible;
+  const useGlyph = !useImage && glyph && legible;
 
-  if (useGlyph) {
+  if (useImage) {
+    // A imagem é reduzida uma vez para o tamanho da célula; o laço então só
+    // faz blit de um bitmap já do tamanho certo, em vez de reescalar 30 mil
+    // vezes por quadro.
+    const size = Math.max(1, Math.round(cell));
+    if (!imgTile || imgTileSize !== size) buildImgTile(size);
+    for (let r = r0; r < r1; r++) {
+      const row = wrap(r, ROWS) * COLS;
+      const sy = Math.round((r - view.y) * cell);
+      for (let c = c0; c < c1; c++) {
+        if (grid[row + wrap(c, COLS)]) {
+          ctx.drawImage(imgTile, Math.round((c - view.x) * cell), sy);
+        }
+      }
+    }
+  } else if (useGlyph) {
     ctx.font = `${(cell * 0.92).toFixed(1)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -672,6 +719,37 @@ const glyphInput = document.getElementById('glyph');
 glyphInput.oninput = e => {
   glyph = e.target.value.trim();
   draw();
+};
+
+const imgClearBtn = document.getElementById('imgClearBtn');
+
+document.getElementById('imgInput').onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    cellImage = img;
+    imgTile = null;             // força reconstruir no tamanho atual
+    imgClearBtn.hidden = false;
+    URL.revokeObjectURL(url);
+    draw();
+    toast(`Célula agora é ${file.name} — aproxime o zoom para ver`);
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    toast('Não consegui abrir essa imagem');
+  };
+  img.src = url;
+  e.target.value = '';          // permite reescolher o mesmo arquivo depois
+};
+
+imgClearBtn.onclick = () => {
+  cellImage = null;
+  imgTile = null;
+  imgClearBtn.hidden = true;
+  draw();
+  toast('Voltou ao quadrado');
 };
 
 const changeBtn = document.getElementById('changeBtn');
