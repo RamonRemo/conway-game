@@ -1,7 +1,7 @@
 # Jogo da Vida
 
 Um Jogo da Vida de Conway feito para rodar em tela cheia como papel de parede vivo.
-Um arquivo, 40 KB, zero dependências — abre no navegador e pronto.
+Um arquivo, 34 KB, zero dependências — abre no navegador e pronto.
 
 **▶ [Jogar](https://ramonremo.github.io/conway-game/)**
 
@@ -12,6 +12,22 @@ Um arquivo, 40 KB, zero dependências — abre no navegador e pronto.
 ```
 
 ---
+
+
+### Atalhos
+
+| Tecla | Ação |
+|---|---|
+| `Espaço` | play / pause |
+| `S` | avança uma geração |
+| `R` | sopa aleatória |
+| `C` | limpa tudo |
+| `M` | insere um modelo aleatório |
+| `X` | sorteia as cores |
+| `G` | liga/desliga a grade |
+| `0` | centraliza a câmera |
+| `F` | tela cheia |
+
 
 ## O que é
 
@@ -36,25 +52,11 @@ construir um computador inteiro dentro dele.
 |---|---|
 | Desenhar | Clique ou arraste no tabuleiro |
 | Apagar | Arraste começando de uma célula viva |
-| Zoom | Roda do mouse (ancora no cursor) ou o slider **Zoom** |
+| Zoom | Roda do mouse, ancorado no cursor |
 | Mover a câmera | Shift+arraste, botão do meio ou botão direito |
 | Controles | Aproxime o mouse do topo da tela |
 
-No celular: **⋯** no canto abre a barra, um dedo desenha, dois dedos movem e dão pinça.
-
-### Atalhos
-
-| Tecla | Ação |
-|---|---|
-| `Espaço` | play / pause |
-| `S` | avança uma geração |
-| `R` | sopa aleatória |
-| `C` | limpa tudo |
-| `M` | insere um modelo aleatório |
-| `X` | sorteia as cores |
-| `G` | liga/desliga a grade |
-| `0` | centraliza a câmera |
-| `F` | tela cheia |
+No celular: **⋯** no canto abre a barra, um dedo desenha, dois dedos movem e dão pinça de zoom.
 
 ### Botões
 
@@ -62,7 +64,9 @@ No celular: **⋯** no canto abre a barra, um dedo desenha, dois dedos movem e d
   abrindo uma clareira ao redor para ele nascer limpo
 - **⁂ Semear** — limpa tudo e espalha ~60 modelos pelo mundo, bem separados;
   é a sopa aleatória, mas feita de coisas que sabem o que estão fazendo
-- **🌈 Change** — a cor das células desliza continuamente, uma volta a cada 2 minutos
+- **🌈 Colorir** — a cor das células desliza continuamente, uma volta a cada 2 minutos
+  (ligado por padrão; o ciclo parte da cor atual e mexe só na matiz, preservando o
+  contraste com o fundo)
 - **🎨 Cores** — sorteia fundo e células com contraste garantido
 
 ## A galeria

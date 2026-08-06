@@ -72,6 +72,15 @@
     background: #000;
     cursor: pointer;
   }
+  input[type=text] {
+    font: inherit;
+    width: 44px;
+    text-align: center;
+    background: #000;
+    color: #fff;
+    border: 1px solid #fff;
+    padding: 4px 2px;
+  }
   input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
   input[type=color]::-webkit-color-swatch { border: none; }
   input[type=color]::-moz-color-swatch { border: none; }
@@ -113,6 +122,9 @@
        de quem quer desenhar ali — some, e o botão flutuante assume. */
     #trigger { display: none; }
     #barToggle { display: block; }
+    /* Some com o que é ruim de operar no toque: seletores de cor nativos e
+       o campo de caractere, que exigiria abrir o teclado de emoji. O botão
+       🎨 Cores continua lá e cobre a troca de cores. */
     .only-mouse { display: none; }
     .only-touch { display: inline; }
     body.idle { cursor: auto; }
@@ -129,6 +141,7 @@
     }
     #bar .sep { display: none; }
     #bar button { padding: 6px 10px; }
+    input[type=text] { width: 40px; }
     #bar label { gap: 4px; }
     input[type=range] { width: 82px; }
     input[type=color] { width: 34px; height: 30px; }
@@ -158,9 +171,12 @@
   <label>Vel <input type="range" id="speed" min="1" max="60" value="12"></label>
   <button id="gridBtn">Grade</button>
   <div class="sep"></div>
-  <label>Fundo <input type="color" id="bgColor" value="#000000"></label>
-  <label>Células <input type="color" id="cellColor" value="#ffffff"></label>
+  <label class="only-mouse">Fundo <input type="color" id="bgColor" value="#000000"></label>
+  <label class="only-mouse">Células <input type="color" id="cellColor" value="#ffffff"></label>
   <button id="changeBtn">🌈 Colorir</button>
+  <label class="only-mouse" title="Caractere desenhado em cada célula viva (vazio = quadrado)">
+    Char <input type="text" id="glyph" maxlength="2" placeholder="■" autocomplete="off">
+  </label>
   <button id="rndColorBtn">🎨 Cores</button>
   <div class="sep"></div>
   <button id="modelBtn">⬡ Modelo</button>
@@ -207,6 +223,7 @@ let lastFrame = 0;
 let aliveCount = 0;
 let bgColor = '#000000';
 let cellColor = '#ffffff';
+let glyph = '';           // vazio = célula quadrada sólida
 
 // Modo "change": a matiz das células desliza continuamente. Guardamos
 // saturação e luminosidade para o ciclo não mexer no contraste com o fundo.
@@ -340,13 +357,33 @@ function draw() {
   const r0 = Math.floor(view.y), r1 = Math.ceil(view.y + h / cell);
 
   ctx.fillStyle = cellColor;
-  const size = Math.ceil(cell);
-  for (let r = r0; r < r1; r++) {
-    const row = wrap(r, ROWS) * COLS;
-    const sy = (r - view.y) * cell;
-    for (let c = c0; c < c1; c++) {
-      if (grid[row + wrap(c, COLS)]) {
-        ctx.fillRect((c - view.x) * cell, sy, size, size);
+
+  // Abaixo de 6 px o caractere vira um borrão ilegível e custa caro de
+  // desenhar, então nesse zoom o quadrado sólido assume de volta.
+  const useGlyph = glyph && cell >= 6;
+
+  if (useGlyph) {
+    ctx.font = `${(cell * 0.92).toFixed(1)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let r = r0; r < r1; r++) {
+      const row = wrap(r, ROWS) * COLS;
+      const sy = (r - view.y) * cell + cell / 2;
+      for (let c = c0; c < c1; c++) {
+        if (grid[row + wrap(c, COLS)]) {
+          ctx.fillText(glyph, (c - view.x) * cell + cell / 2, sy);
+        }
+      }
+    }
+  } else {
+    const size = Math.ceil(cell);
+    for (let r = r0; r < r1; r++) {
+      const row = wrap(r, ROWS) * COLS;
+      const sy = (r - view.y) * cell;
+      for (let c = c0; c < c1; c++) {
+        if (grid[row + wrap(c, COLS)]) {
+          ctx.fillRect((c - view.x) * cell, sy, size, size);
+        }
       }
     }
   }
@@ -630,6 +667,12 @@ function hexToHsl(hex) {
   else h = (r - g) / d + 4;
   return [((h * 60) % 360 + 360) % 360, s * 100, l * 100];
 }
+
+const glyphInput = document.getElementById('glyph');
+glyphInput.oninput = e => {
+  glyph = e.target.value.trim();
+  draw();
+};
 
 const changeBtn = document.getElementById('changeBtn');
 changeBtn.onclick = () => {
